@@ -1,0 +1,21 @@
+@startuml c4-context
+!include https://raw.githubusercontent.com/plantuml-stdlib/C4-PlantUML/master/C4_Context.puml
+
+LAYOUT_WITH_LEGEND()
+
+title C4 Level 1 — System Context Diagram
+
+Person(user, "End User", "A person using the app via browser or mobile")
+Person(admin, "Admin", "Monitors system activity and user logs")
+
+System(chatapp, "Chat & Dashboard App", "Allows users to chat in real-time and view live system metrics")
+
+System_Ext(google, "Google OAuth2", "Handles user authentication via OAuth2 protocol")
+System_Ext(email, "Email Notifications", "Future: sends notifications for events")
+
+Rel(user, chatapp, "Logs in, sends messages, views dashboard", "HTTPS / WebSocket")
+Rel(admin, chatapp, "Views logs and system metrics", "HTTPS")
+Rel(chatapp, google, "Redirects for OAuth2 login, receives access token", "HTTPS / OAuth2")
+Rel(chatapp, email, "Sends notification events", "HTTPS (future)")
+
+@enduml
