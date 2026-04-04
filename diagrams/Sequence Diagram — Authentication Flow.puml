@@ -1,0 +1,26 @@
+@startuml
+title Authentication Flow (Google OAuth2 + JWT)
+
+actor User
+participant Browser
+participant "API Gateway" as APIGW
+participant "Auth Service" as Auth
+participant "Google OAuth" as Google
+
+User -> Browser : Click Login
+Browser -> APIGW : /auth/google/login
+APIGW -> Auth : Forward request
+Auth -> Google : Redirect user
+
+User -> Google : Login & Consent
+Google -> Auth : Callback with code
+
+Auth -> Auth : Generate JWT
+Auth -> APIGW : Return token
+APIGW -> Browser : Send JWT
+
+Browser -> APIGW : API request (JWT)
+APIGW -> Auth : Validate token
+Auth --> APIGW : Valid
+
+@enduml

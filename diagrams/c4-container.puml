@@ -1,0 +1,48 @@
+@startuml c4-container
+!include https://raw.githubusercontent.com/plantuml-stdlib/C4-PlantUML/master/C4_Container.puml
+
+LAYOUT_WITH_LEGEND()
+
+title C4 Level 2 — Container Diagram
+
+Person(user, "End User", "Browser or mobile client")
+System_Ext(google, "Google OAuth2", "External identity provider")
+
+System_Boundary(chatapp, "Chat & Dashboard App") {
+
+    Container(gateway, "API Gateway", "Kong / NGINX", "Single entry point. Handles routing, rate limiting, JWT validation")
+
+    Container(auth, "Auth Service", "Node.js + Passport.js", "Manages OAuth2 login flow, issues JWTs, handles logout")
+    Container(chat, "Chat Service", "Node.js + Socket.io", "CRUD for messages and rooms, real-time WebSocket delivery")
+    Container(user_svc, "User Service", "Node.js", "User profile management and search")
+    Container(dashboard, "Dashboard Service", "Python + FastAPI", "Aggregates metrics, serves real-time dashboard data")
+
+    ContainerDb(postgres, "PostgreSQL", "SQL Database", "Stores users and sessions — relational, ACID compliant")
+    ContainerDb(mongo, "MongoDB", "NoSQL Database", "Stores chat messages and rooms — high write throughput")
+    ContainerDb(redis, "Redis", "In-Memory Store", "Session cache, pub/sub for real-time broadcast, message cache")
+    ContainerDb(rabbit, "RabbitMQ", "Message Broker", "Async event bus between Chat and Dashboard services")
+    ContainerDb(opensearch, "OpenSearch", "Log Store", "Centralized log aggregation from all services via Filebeat")
+}
+
+Rel(user, gateway, "All requests", "HTTPS / WebSocket")
+Rel(gateway, auth, "Auth routes", "HTTP REST")
+Rel(gateway, chat, "Chat routes + WebSocket", "HTTP REST / WS")
+Rel(gateway, user_svc, "User routes", "HTTP REST")
+Rel(gateway, dashboard, "Dashboard routes", "HTTP REST")
+
+Rel(auth, google, "OAuth2 authorization flow", "HTTPS")
+Rel(auth, postgres, "Read/write users and sessions", "SQL")
+Rel(auth, redis, "Store and validate sessions", "Redis protocol")
+
+Rel(chat, mongo, "Read/write messages and rooms", "MongoDB protocol")
+Rel(chat, redis, "Cache recent messages, pub/sub broadcast", "Redis protocol")
+Rel(chat, rabbit, "Publish message-created events", "AMQP")
+
+Rel(dashboard, rabbit, "Consume message events", "AMQP")
+
+Rel(auth, opensearch, "Ship logs via Filebeat", "HTTP")
+Rel(chat, opensearch, "Ship logs via Filebeat", "HTTP")
+Rel(user_svc, opensearch, "Ship logs via Filebeat", "HTTP")
+Rel(dashboard, opensearch, "Ship logs via Filebeat", "HTTP")
+
+@enduml
