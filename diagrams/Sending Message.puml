@@ -1,0 +1,25 @@
+@startuml
+title Chat Message Flow
+
+actor User
+participant Client
+participant "API Gateway" as APIGW
+participant "Chat Service" as Chat
+participant "MongoDB" as DB
+participant "Redis" as Cache
+participant "RabbitMQ" as MQ
+
+User -> Client : Send message
+Client -> APIGW : POST /messages (JWT)
+
+APIGW -> Chat : Forward request
+Chat -> Chat : Validate JWT
+
+Chat -> DB : Save message
+Chat -> Cache : Cache message
+Chat -> MQ : Publish event
+
+Chat -> APIGW : Response OK
+APIGW -> Client : Message sent
+
+@enduml

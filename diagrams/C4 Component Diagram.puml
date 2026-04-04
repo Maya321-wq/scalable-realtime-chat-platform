@@ -1,0 +1,42 @@
+@startuml
+!include https://raw.githubusercontent.com/plantuml-stdlib/C4-PlantUML/master/C4_Component.puml
+
+title C4 Level 3 — Component Diagram: Chat Service
+
+' External Systems
+Person(user, "User")
+System_Ext(api_gateway, "API Gateway")
+System_Ext(mongodb, "MongoDB")
+System_Ext(redis, "Redis")
+System_Ext(rabbitmq, "RabbitMQ")
+
+' Chat Service Container
+Container_Boundary(chat_service, "Chat Service") {
+
+    Component(ws_handler, "WebSocket Handler", "Node.js", "Handles real-time connections")
+    Component(msg_controller, "Message Controller", "Node.js", "REST API for messages")
+    Component(auth_middleware, "Auth Middleware", "JWT", "Validates tokens")
+    Component(room_manager, "Room Manager", "Service", "Manages chat rooms")
+    Component(msg_repo, "Message Repository", "MongoDB Driver", "Database access")
+    Component(event_publisher, "Event Publisher", "RabbitMQ", "Publishes events")
+    Component(cache_manager, "Cache Manager", "Redis", "Caches recent messages")
+}
+
+' Relationships - Internal
+Rel(ws_handler, auth_middleware, "Validate token")
+Rel(ws_handler, room_manager, "Join/leave room")
+
+Rel(msg_controller, auth_middleware, "Validate request")
+Rel(msg_controller, msg_repo, "CRUD messages")
+Rel(msg_controller, cache_manager, "Cache last 50 messages")
+Rel(msg_controller, event_publisher, "Publish event")
+
+' External Connections
+Rel(api_gateway, msg_controller, "REST API")
+Rel(api_gateway, ws_handler, "WebSocket")
+
+Rel(msg_repo, mongodb, "Read/Write")
+Rel(cache_manager, redis, "Cache access")
+Rel(event_publisher, rabbitmq, "Publish events")
+
+@enduml
