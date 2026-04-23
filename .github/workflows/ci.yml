@@ -27,8 +27,8 @@ jobs:
         if: steps.check.outputs.skip == 'false'
         with:
           node-version: '20'
-          cache: 'npm'
-      - run: npm ci
+          # cache: 'npm' removed to prevent "lock file not found" errors
+      - run: npm install
         if: steps.check.outputs.skip == 'false'
       - run: npm run lint
         if: steps.check.outputs.skip == 'false'
@@ -55,8 +55,7 @@ jobs:
         if: steps.check.outputs.skip == 'false'
         with:
           node-version: '20'
-          cache: 'npm'
-      - run: npm ci
+      - run: npm install
         if: steps.check.outputs.skip == 'false'
       - run: npm run lint
         if: steps.check.outputs.skip == 'false'
@@ -83,8 +82,7 @@ jobs:
         if: steps.check.outputs.skip == 'false'
         with:
           node-version: '20'
-          cache: 'npm'
-      - run: npm ci
+      - run: npm install
         if: steps.check.outputs.skip == 'false'
       - run: npm run lint
         if: steps.check.outputs.skip == 'false'
@@ -103,7 +101,7 @@ jobs:
         with:
           python-version: '3.11'
       - run: pip install -r requirements.txt
-      - run: pytest --cov=src tests/ || true  # || true prevents early failure during scaffold
+      - run: pytest --cov=src tests/ || true
 
   build-images:
     name: Build all Docker images
