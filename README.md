@@ -15,4 +15,4 @@ docker compose ps
 | Chat Service | 3002 | Maya |
 | User Service | 3003 | Leena |
 | Dashboard Service | 3004 | Dareen |
-| Frontend | 5173 | Leena |
+| Frontend | 5173 | Dareen |
