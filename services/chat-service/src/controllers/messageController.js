@@ -1,3 +1,4 @@
+const mongoose = require('mongoose');
 const Message = require('../models/Message');
 const Room = require('../models/Room');
 const { cacheMessages, getCachedMessages, invalidateCache } = require('../services/cacheService');
@@ -6,7 +7,12 @@ const { publishMessageCreated } = require('../publishers/rabbitPublisher');
 exports.sendMessage = async (req, res) => {
   try {
     const { content } = req.body;
-    if (!content) return res.status(400).json({ error: 'content is required' });
+    
+    // ✅ Validation FIRST
+    if (!content || content.trim().length === 0) 
+      return res.status(400).json({ error: 'content is required' });
+    if (content.length > 5000) 
+      return res.status(400).json({ error: 'content exceeds 5000 character limit' });
 
     const room = await Room.findById(req.params.id);
     if (!room) return res.status(404).json({ error: 'Room not found' });
@@ -17,10 +23,8 @@ exports.sendMessage = async (req, res) => {
       content,
     });
 
-    // Invalidate cache for this room
     await invalidateCache(req.params.id);
 
-    // Publish event to RabbitMQ (Issue #15)
     await publishMessageCreated({
       roomId: req.params.id,
       userId: req.user.userId,
@@ -39,6 +43,14 @@ exports.getMessages = async (req, res) => {
     const { cursor, limit = 50 } = req.query;
     const roomId = req.params.id;
 
+    // ✅ Validate cursor format
+    if (cursor && !mongoose.Types.ObjectId.isValid(cursor)) {
+      return res.status(400).json({ error: 'Invalid cursor format' });
+    }
+
+    // ✅ Sanitize and clamp limit (1-100)
+    const limitNum = Math.min(Math.max(parseInt(limit) || 50, 1), 100);
+
     // Try cache first (Issue #14)
     const cached = await getCachedMessages(roomId);
     if (cached && !cursor) {
@@ -46,18 +58,17 @@ exports.getMessages = async (req, res) => {
     }
 
     const query = { roomId };
-    if (cursor) query._id = { $lt: cursor };  // cursor-based: fetch older messages
+    if (cursor) query._id = { $lt: cursor };
 
     const messages = await Message.find(query)
       .sort({ _id: -1 })
-      .limit(parseInt(limit) + 1);  // fetch one extra to know if there's a next page
+      .limit(limitNum + 1);
 
-    const hasMore = messages.length > limit;
+    const hasMore = messages.length > limitNum;
     if (hasMore) messages.pop();
 
     const nextCursor = hasMore ? messages[messages.length - 1]._id : null;
 
-    // Cache first page (no cursor = most recent messages)
     if (!cursor) await cacheMessages(roomId, messages);
 
     res.json({ messages, nextCursor });
@@ -73,7 +84,13 @@ exports.editMessage = async (req, res) => {
     if (message.userId !== req.user.userId)
       return res.status(403).json({ error: 'You can only edit your own messages' });
 
-    message.content = req.body.content;
+    const { content } = req.body;
+    if (!content || content.trim().length === 0) 
+      return res.status(400).json({ error: 'content is required' });
+    if (content.length > 5000) 
+      return res.status(400).json({ error: 'content exceeds 5000 character limit' });
+
+    message.content = content;
     message.editedAt = new Date();
     await message.save();
 
