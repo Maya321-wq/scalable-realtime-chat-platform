@@ -14,22 +14,22 @@ exports.sendMessage = async (req, res) => {
     if (content.length > 5000) 
       return res.status(400).json({ error: 'content exceeds 5000 character limit' });
 
-    const room = await Room.findById(req.params.id);
+    const room = await Room.findById(req.params.roomId);
     if (!room) return res.status(404).json({ error: 'Room not found' });
 
     const message = await Message.create({
-      roomId: req.params.id,
+      roomId: req.params.roomId,
       userId: req.user.userId,
       content,
     });
 
-    await invalidateCache(req.params.id);
+    await invalidateCache(req.params.roomId);
 
     await publishMessageCreated({
-      roomId: req.params.id,
+      roomId: req.params.roomId,
       userId: req.user.userId,
       messageId: message._id.toString(),
-      timestamp: message.createdAt,
+      timestamp: message.createdAt.toISOString(),
     });
 
     res.status(201).json(message);
@@ -41,7 +41,7 @@ exports.sendMessage = async (req, res) => {
 exports.getMessages = async (req, res) => {
   try {
     const { cursor, limit = 50 } = req.query;
-    const roomId = req.params.id;
+    const roomId = req.params.roomId;
 
     // ✅ Validate cursor format
     if (cursor && !mongoose.Types.ObjectId.isValid(cursor)) {
@@ -79,7 +79,7 @@ exports.getMessages = async (req, res) => {
 
 exports.editMessage = async (req, res) => {
   try {
-    const message = await Message.findById(req.params.id);
+    const message = await Message.findById(req.params.messageId);
     if (!message) return res.status(404).json({ error: 'Message not found' });
     if (message.userId !== req.user.userId)
       return res.status(403).json({ error: 'You can only edit your own messages' });
@@ -103,7 +103,7 @@ exports.editMessage = async (req, res) => {
 
 exports.deleteMessage = async (req, res) => {
   try {
-    const message = await Message.findById(req.params.id);
+    const message = await Message.findById(req.params.messageId);
     if (!message) return res.status(404).json({ error: 'Message not found' });
     if (message.userId !== req.user.userId)
       return res.status(403).json({ error: 'You can only delete your own messages' });

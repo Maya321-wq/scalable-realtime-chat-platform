@@ -2,6 +2,9 @@ const express = require('express');
 const mongoose = require('mongoose');
 const roomRoutes = require('./routes/roomRoutes');
 const messageRoutes = require('./routes/messageRoutes');
+const { initRabbitMQ } = require('./publishers/rabbitPublisher');
+
+initRabbitMQ().catch(err => console.error('[RabbitMQ] init failed:', err));
 
 const app = express();
 app.use(express.json());
