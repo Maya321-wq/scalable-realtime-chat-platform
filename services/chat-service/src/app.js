@@ -1,6 +1,7 @@
 const express = require('express');
 const mongoose = require('mongoose');
 const roomRoutes = require('./routes/roomRoutes');
+const messageRoutes = require('./routes/messageRoutes');
 
 const app = express();
 app.use(express.json());
@@ -17,6 +18,8 @@ mongoose.connect(mongoUri)
 
 // Register room routes
 app.use('/rooms', roomRoutes);
+app.use('/rooms', messageRoutes);  // routes already include /:id/messages
+app.use('/', messageRoutes);  // Mount message-level routes (edit/delete)
 
 // Health check endpoint (useful for Docker healthchecks + CI)
 app.get('/health', (req, res) => res.json({ 
