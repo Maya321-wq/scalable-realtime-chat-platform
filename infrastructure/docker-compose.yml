@@ -9,6 +9,7 @@ volumes:
   mongo-data:
   redis-data:
   opensearch-data:
+  rabbitmq-data:
 
 services:
 
@@ -62,7 +63,9 @@ services:
     image: rabbitmq:3-management-alpine
     ports:
       - "5672:5672"
-      - "15672:15672"
+      - "15672:15672"   # management UI
+    volumes:
+      - rabbitmq-data:/var/lib/rabbitmq
     networks:
       - app-network
     healthcheck:
@@ -76,9 +79,47 @@ services:
     environment:
       - discovery.type=single-node
       - DISABLE_SECURITY_PLUGIN=true
+      - "OPENSEARCH_JAVA_OPTS=-Xms512m -Xmx512m"
     ports:
       - "9200:9200"
     volumes:
       - opensearch-data:/usr/share/opensearch/data
     networks:
       - app-network
+
+  # Uncomment each service when it gets implemented 
+  
+  # auth-service:
+  #   build: ../services/auth-service
+  #   ports: ["3001:3001"]
+  #   env_file: ../services/auth-service/.env.example
+  #   depends_on:
+  #     postgres: { condition: service_healthy }
+  #     redis: { condition: service_healthy }
+  #   networks: [app-network]
+
+  # chat-service:
+  #   build: ../services/chat-service
+  #   ports: ["3002:3002"]
+  #   env_file: ../services/chat-service/.env.example
+  #   depends_on:
+  #     mongodb: { condition: service_healthy }
+  #     redis: { condition: service_healthy }
+  #     rabbitmq: { condition: service_healthy }
+  #   networks: [app-network]
+
+  # user-service:
+  #   build: ../services/user-service
+  #   ports: ["3003:3003"]
+  #   env_file: ../services/user-service/.env.example
+  #   depends_on:
+  #     postgres: { condition: service_healthy }
+  #   networks: [app-network]
+
+  # dashboard-service:
+  #   build: ../services/dashboard-service
+  #   ports: ["3004:3004"]
+  #   env_file: ../services/dashboard-service/.env.example
+  #   depends_on:
+  #     rabbitmq: { condition: service_healthy }
+  #   networks: [app-network]
