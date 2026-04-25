@@ -1,0 +1,170 @@
+openapi: 3.0.3
+info:
+  title: Auth Service API
+  description: |
+    Handles Google OAuth2 login, JWT issuance, token validation, and logout.
+    All protected routes on other services require the JWT returned here.
+  version: 1.0.0
+
+servers:
+  - url: http://localhost:8080
+    description: Local via API Gateway
+
+paths:
+
+  /auth/google/login:
+    get:
+      summary: Initiate Google OAuth2 login
+      description: |
+        Redirects the user to Google's OAuth2 consent screen.
+        After consent, Google redirects back to /auth/google/callback.
+      tags: [Auth]
+      responses:
+        '302':
+          description: Redirect to Google OAuth2
+
+  /auth/google/callback:
+    get:
+      summary: Google OAuth2 callback
+      description: |
+        Google redirects here after the user grants consent.
+        The auth service exchanges the code for user profile data,
+        upserts the user in PostgreSQL, issues a signed RS256 JWT,
+        stores a hash in Redis (for logout), and returns the token.
+      tags: [Auth]
+      responses:
+        '200':
+          description: JWT issued successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AuthResponse'
+        '401':
+          description: Google auth failed
+
+  /auth/validate:
+    post:
+      summary: Validate a JWT token
+      description: |
+        Called by the API Gateway or other services to verify a JWT.
+        Checks both the RS256 signature and the Redis session store
+        (to detect logouts before expiry).
+      tags: [Auth]
+      security:
+        - bearerAuth: []
+      responses:
+        '200':
+          description: Token is valid
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  valid:
+                    type: boolean
+                    example: true
+                  user:
+                    $ref: '#/components/schemas/JWTPayload'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+
+  /auth/logout:
+    post:
+      summary: Invalidate JWT (logout)
+      description: |
+        Removes the session hash from Redis, effectively invalidating
+        the token before its natural 1-hour expiry.
+      tags: [Auth]
+      security:
+        - bearerAuth: []
+      responses:
+        '200':
+          description: Logged out
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  message:
+                    type: string
+                    example: Logged out
+
+  /auth/public-key:
+    get:
+      summary: Get RSA public key
+      description: |
+        Returns the PEM-encoded public key so other services can
+        verify JWTs locally without calling the auth service on every request.
+      tags: [Auth]
+      responses:
+        '200':
+          description: RSA public key (PEM format)
+          content:
+            text/plain:
+              schema:
+                type: string
+                example: "-----BEGIN PUBLIC KEY-----\n..."
+
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+
+  schemas:
+    AuthResponse:
+      type: object
+      required: [token, user]
+      properties:
+        token:
+          type: string
+          description: Signed RS256 JWT, valid for 1 hour
+          example: eyJhbGciOiJSUzI1NiJ9...
+        user:
+          type: object
+          properties:
+            id:
+              type: string
+              format: uuid
+            email:
+              type: string
+              format: email
+            name:
+              type: string
+            role:
+              type: string
+              enum: [user, admin]
+
+    JWTPayload:
+      type: object
+      properties:
+        sub:
+          type: string
+          format: uuid
+          description: User's UUID (subject)
+        email:
+          type: string
+        role:
+          type: string
+          enum: [user, admin]
+        name:
+          type: string
+        iat:
+          type: integer
+          description: Issued at (Unix timestamp)
+        exp:
+          type: integer
+          description: Expiry (Unix timestamp)
+
+  responses:
+    Unauthorized:
+      description: Token missing, expired, or invalidated
+      content:
+        application/json:
+          schema:
+            type: object
+            properties:
+              error:
+                type: string
+                example: Invalid token
