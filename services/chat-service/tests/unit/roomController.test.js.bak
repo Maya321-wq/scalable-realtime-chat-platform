@@ -1,0 +1,510 @@
+﻿/**
+ * Unit Tests for Room Controller (Issue #11 + #16)
+ * 
+ * Coverage targets: 80%+ statements, branches, functions, lines
+ * Mocks: Room model only (controller logic tested in isolation)
+ */
+
+const roomController = require('../../src/controllers/roomController');
+const Room = require('../../src/models/Room');
+
+// Mock the Room model to isolate controller logic
+jest.mock('../../src/models/Room');
+
+// Standard mock request factory
+const mockReq = (overrides = {}) => ({
+  body: {},
+  params: {},
+  query: {},
+  user: { 
+    userId: 'user-1', 
+    email: 'test@example.com', 
+    role: 'user' 
+  },
+  ...overrides,
+});
+
+// Standard mock response factory
+const mockRes = () => {
+  const res = {};
+  res.status = jest.fn().mockReturnValue(res);
+  res.json = jest.fn().mockReturnValue(res);
+  return res;
+};
+
+// Clean mocks between tests
+afterEach(() => {
+  jest.clearAllMocks();
+});
+
+// ============================================================================
+// CREATE ROOM TESTS
+// ============================================================================
+describe('createRoom', () => {
+  
+  test('creates room and returns 201 with room data', async () => {
+    const mockRoom = { 
+      _id: 'room-123', 
+      name: 'General', 
+      description: 'General chat',
+      createdBy: 'user-1',
+      createdAt: new Date(),
+      updatedAt: new Date()
+    };
+    
+    Room.create.mockResolvedValue(mockRoom);
+    
+    const req = mockReq({ 
+      body: { name: 'General', description: 'General chat' } 
+    });
+    const res = mockRes();
+    
+    await roomController.createRoom(req, res);
+    
+    expect(Room.create).toHaveBeenCalledWith(
+      expect.objectContaining({
+        name: 'General',
+        description: 'General chat',
+        createdBy: 'user-1'
+      })
+    );
+    expect(res.status).toHaveBeenCalledWith(201);
+    expect(res.json).toHaveBeenCalledWith(mockRoom);
+  });
+
+  test('returns 400 when name is missing', async () => {
+    const req = mockReq({ body: { description: 'No name provided' } });
+    const res = mockRes();
+    
+    await roomController.createRoom(req, res);
+    
+    expect(res.status).toHaveBeenCalledWith(400);
+    expect(res.json).toHaveBeenCalledWith(
+      expect.objectContaining({ error: expect.any(String) })
+    );
+  });
+
+  test('returns 400 when name is empty string', async () => {
+    const req = mockReq({ body: { name: '', description: 'Empty name' } });
+    const res = mockRes();
+    
+    await roomController.createRoom(req, res);
+    
+    expect(res.status).toHaveBeenCalledWith(400);
+  });
+
+  test('handles database error gracefully', async () => {
+    Room.create.mockRejectedValue(new Error('Database connection failed'));
+    
+    const req = mockReq({ body: { name: 'Test Room' } });
+    const res = mockRes();
+    
+    await roomController.createRoom(req, res);
+    
+    expect(res.status).toHaveBeenCalledWith(500);
+  });
+});
+
+// ============================================================================
+// GET ROOMS (LIST WITH PAGINATION) TESTS
+// ============================================================================
+describe('getRooms', () => {
+  
+  test('returns paginated room list with default pagination', async () => {
+    const mockRooms = [
+      { _id: 'r1', name: 'Room 1', createdAt: new Date() },
+      { _id: 'r2', name: 'Room 2', createdAt: new Date() }
+    ];
+    
+    // Mock chainable Mongoose query
+    Room.find = jest.fn().mockReturnValue({
+      limit: jest.fn().mockResolvedValue(mockRooms)
+    });
+    Room.countDocuments = jest.fn().mockResolvedValue(2);
+    
+    const req = mockReq({ query: {} }); // No query params = defaults
+    const res = mockRes();
+    
+    await roomController.getRooms(req, res);
+    
+    expect(Room.find).toHaveBeenCalled();
+    expect(res.json).toHaveBeenCalledWith(
+      expect.objectContaining({
+        rooms: mockRooms,
+        total: 2,
+        page: 1,
+        pages: 1,
+        hasNext: expect.any(Boolean),
+        hasPrev: expect.any(Boolean)
+      })
+    );
+  });
+
+  test('respects limit and page query parameters', async () => {
+    const mockRooms = Array(5).fill(null).map((_, i) => ({
+      _id: `r${i+1}`, name: `Room ${i+1}`, createdAt: new Date()
+    }));
+    
+    Room.find = jest.fn().mockReturnValue({
+      skip: jest.fn().mockReturnValue({
+        limit: jest.fn().mockResolvedValue(mockRooms)
+      })
+    });
+    Room.countDocuments = jest.fn().mockResolvedValue(20);
+    
+    const req = mockReq({ query: { page: '2', limit: '5' } });
+    const res = mockRes();
+    
+    await roomController.getRooms(req, res);
+    
+    expect(Room.find().skip).toHaveBeenCalledWith(5); // (page-1) * limit = 5
+    expect(Room.find().skip().limit).toHaveBeenCalledWith(5);
+  });
+
+  test('calculates correct pagination metadata', async () => {
+    const mockRooms = Array(10).fill(null).map((_, i) => ({
+      _id: `r${i+1}`, name: `Room ${i+1}`, createdAt: new Date()
+    }));
+    
+    Room.find = jest.fn().mockReturnValue({
+      skip: jest.fn().mockReturnValue({
+        limit: jest.fn().mockResolvedValue(mockRooms)
+      })
+    });
+    Room.countDocuments = jest.fn().mockResolvedValue(45); // 45 total rooms
+    
+    const req = mockReq({ query: { page: '3', limit: '10' } });
+    const res = mockRes();
+    
+    await roomController.getRooms(req, res);
+    
+    expect(res.json).toHaveBeenCalledWith(
+      expect.objectContaining({
+        total: 45,
+        page: 3,
+        limit: 10,
+        pages: 5, // ceil(45/10) = 5
+        hasNext: true, // page 3 of 5 has next
+        hasPrev: true // page 3 of 5 has prev
+      })
+    );
+  });
+
+  test('returns empty array when no rooms exist', async () => {
+    Room.find = jest.fn().mockReturnValue({
+      limit: jest.fn().mockResolvedValue([])
+    });
+    Room.countDocuments = jest.fn().mockResolvedValue(0);
+    
+    const req = mockReq({ query: {} });
+    const res = mockRes();
+    
+    await roomController.getRooms(req, res);
+    
+    expect(res.json).toHaveBeenCalledWith(
+      expect.objectContaining({
+        rooms: [],
+        total: 0,
+        pages: 0
+      })
+    );
+  });
+
+  test('handles database error gracefully', async () => {
+    Room.find = jest.fn().mockReturnValue({
+      limit: jest.fn().mockRejectedValue(new Error('Query failed'))
+    });
+    
+    const req = mockReq({ query: {} });
+    const res = mockRes();
+    
+    await roomController.getRooms(req, res);
+    
+    expect(res.status).toHaveBeenCalledWith(500);
+  });
+});
+
+// ============================================================================
+// GET ROOM BY ID TESTS
+// ============================================================================
+describe('getRoom', () => {
+  
+  test('returns room when found by ID', async () => {
+    const mockRoom = { 
+      _id: 'room-123', 
+      name: 'General', 
+      description: 'General chat',
+      createdBy: 'user-1',
+      createdAt: new Date(),
+      updatedAt: new Date()
+    };
+    
+    Room.findById.mockResolvedValue(mockRoom);
+    
+    const req = mockReq({ params: { id: 'room-123' } });
+    const res = mockRes();
+    
+    await roomController.getRoom(req, res);
+    
+    expect(Room.findById).toHaveBeenCalledWith('room-123');
+    expect(res.json).toHaveBeenCalledWith(mockRoom);
+  });
+
+  test('returns 404 when room not found', async () => {
+    Room.findById.mockResolvedValue(null);
+    
+    const req = mockReq({ params: { id: 'nonexistent' } });
+    const res = mockRes();
+    
+    await roomController.getRoom(req, res);
+    
+    expect(res.status).toHaveBeenCalledWith(404);
+    expect(res.json).toHaveBeenCalledWith(
+      expect.objectContaining({ error: 'Room not found' })
+    );
+  });
+
+  test('handles invalid ObjectId format', async () => {
+    // Mongoose will throw CastError for invalid ObjectId
+    Room.findById.mockImplementation(() => {
+      throw new Error('Cast to ObjectId failed');
+    });
+    
+    const req = mockReq({ params: { id: 'invalid-id-format' } });
+    const res = mockRes();
+    
+    await roomController.getRoom(req, res);
+    
+    expect(res.status).toHaveBeenCalledWith(400);
+  });
+
+  test('handles database error gracefully', async () => {
+    Room.findById.mockRejectedValue(new Error('Database error'));
+    
+    const req = mockReq({ params: { id: 'room-123' } });
+    const res = mockRes();
+    
+    await roomController.getRoom(req, res);
+    
+    expect(res.status).toHaveBeenCalledWith(500);
+  });
+});
+
+// ============================================================================
+// UPDATE ROOM TESTS
+// ============================================================================
+describe('updateRoom', () => {
+  
+  test('updates room when user is owner', async () => {
+    const mockRoom = {
+      _id: 'room-123',
+      name: 'Old Name',
+      description: 'Old desc',
+      createdBy: 'user-1', // Matches req.user.userId
+      save: jest.fn().mockResolvedValue({
+        _id: 'room-123',
+        name: 'New Name',
+        description: 'New desc',
+        createdBy: 'user-1',
+        updatedAt: new Date()
+      })
+    };
+    
+    Room.findById.mockResolvedValue(mockRoom);
+    
+    const req = mockReq({ 
+      params: { id: 'room-123' },
+      body: { name: 'New Name', description: 'New desc' }
+    });
+    const res = mockRes();
+    
+    await roomController.updateRoom(req, res);
+    
+    expect(mockRoom.name).toBe('New Name');
+    expect(mockRoom.save).toHaveBeenCalled();
+    expect(res.json).toHaveBeenCalledWith(
+      expect.objectContaining({
+        _id: 'room-123',
+        name: 'New Name',
+        updatedAt: expect.any(Date)
+      })
+    );
+  });
+
+  test('returns 403 when user is not owner', async () => {
+    Room.findById.mockResolvedValue({
+      _id: 'room-123',
+      name: 'Protected Room',
+      createdBy: 'other-user', // Does NOT match req.user.userId
+      save: jest.fn()
+    });
+    
+    const req = mockReq({ 
+      params: { id: 'room-123' },
+      body: { name: 'Hacked Name' }
+    });
+    const res = mockRes();
+    
+    await roomController.updateRoom(req, res);
+    
+    expect(res.status).toHaveBeenCalledWith(403);
+    expect(res.json).toHaveBeenCalledWith(
+      expect.objectContaining({ error: 'Not authorized' })
+    );
+  });
+
+  test('returns 404 when room not found', async () => {
+    Room.findById.mockResolvedValue(null);
+    
+    const req = mockReq({ 
+      params: { id: 'nonexistent' },
+      body: { name: 'Update' }
+    });
+    const res = mockRes();
+    
+    await roomController.updateRoom(req, res);
+    
+    expect(res.status).toHaveBeenCalledWith(404);
+  });
+
+  test('returns 400 when no updatable fields provided', async () => {
+    const mockRoom = {
+      _id: 'room-123',
+      createdBy: 'user-1',
+      save: jest.fn()
+    };
+    
+    Room.findById.mockResolvedValue(mockRoom);
+    
+    const req = mockReq({ 
+      params: { id: 'room-123' },
+      body: {} // Empty body = nothing to update
+    });
+    const res = mockRes();
+    
+    await roomController.updateRoom(req, res);
+    
+    expect(res.status).toHaveBeenCalledWith(400);
+  });
+});
+
+// ============================================================================
+// DELETE ROOM TESTS
+// ============================================================================
+describe('deleteRoom', () => {
+  
+  test('deletes room when user is owner', async () => {
+    const mockDeleteOne = jest.fn().mockResolvedValue({ deletedCount: 1 });
+    
+    Room.findById.mockResolvedValue({
+      _id: 'room-123',
+      createdBy: 'user-1', // Matches req.user.userId
+      deleteOne: mockDeleteOne
+    });
+    
+    const req = mockReq({ params: { id: 'room-123' } });
+    const res = mockRes();
+    
+    await roomController.deleteRoom(req, res);
+    
+    expect(mockDeleteOne).toHaveBeenCalled();
+    expect(res.json).toHaveBeenCalledWith(
+      expect.objectContaining({ 
+        message: expect.stringContaining('Deleted') 
+      })
+    );
+  });
+
+  test('returns 403 when user is not owner', async () => {
+    Room.findById.mockResolvedValue({
+      _id: 'room-123',
+      createdBy: 'other-user', // Does NOT match req.user.userId
+      deleteOne: jest.fn()
+    });
+    
+    const req = mockReq({ params: { id: 'room-123' } });
+    const res = mockRes();
+    
+    await roomController.deleteRoom(req, res);
+    
+    expect(res.status).toHaveBeenCalledWith(403);
+    expect(res.json).toHaveBeenCalledWith(
+      expect.objectContaining({ error: 'Not authorized' })
+    );
+  });
+
+  test('returns 404 when room not found', async () => {
+    Room.findById.mockResolvedValue(null);
+    
+    const req = mockReq({ params: { id: 'nonexistent' } });
+    const res = mockRes();
+    
+    await roomController.deleteRoom(req, res);
+    
+    expect(res.status).toHaveBeenCalledWith(404);
+  });
+
+  test('handles deletion failure gracefully', async () => {
+    Room.findById.mockResolvedValue({
+      _id: 'room-123',
+      createdBy: 'user-1',
+      deleteOne: jest.fn().mockRejectedValue(new Error('Delete failed'))
+    });
+    
+    const req = mockReq({ params: { id: 'room-123' } });
+    const res = mockRes();
+    
+    await roomController.deleteRoom(req, res);
+    
+    expect(res.status).toHaveBeenCalledWith(500);
+  });
+});
+
+// ============================================================================
+// EDGE CASES & INTEGRATION
+// ============================================================================
+describe('Room Controller - Edge Cases', () => {
+  
+  test('createRoom handles very long room names', async () => {
+    const longName = 'A'.repeat(200); // Assuming max validation is < 200
+    Room.create.mockResolvedValue({ _id: 'r1', name: longName });
+    
+    const req = mockReq({ body: { name: longName } });
+    const res = mockRes();
+    
+    await roomController.createRoom(req, res);
+    
+    // If validation exists, should return 400; otherwise 201
+    // This test ensures the controller doesn't crash on edge input
+    expect([201, 400]).toContain(res.status.mock.calls[0][0]);
+  });
+
+  test('getRooms handles invalid page/limit params', async () => {
+    Room.find = jest.fn().mockReturnValue({
+      limit: jest.fn().mockResolvedValue([])
+    });
+    Room.countDocuments = jest.fn().mockResolvedValue(0);
+    
+    // Invalid params should fall back to defaults
+    const req = mockReq({ query: { page: 'invalid', limit: '-5' } });
+    const res = mockRes();
+    
+    await roomController.getRooms(req, res);
+    
+    // Should not crash; should use default pagination
+    expect(res.json).toHaveBeenCalled();
+  });
+
+  test('all endpoints handle missing user in request', async () => {
+    const reqWithoutUser = { body: {}, params: {}, query: {} }; // No user property
+    const res = mockRes();
+    
+    // Test each endpoint with missing user
+    await roomController.createRoom(reqWithoutUser, res);
+    expect(res.status).toHaveBeenCalledWith(401); // or 403, depending on middleware
+    
+    jest.clearAllMocks();
+    await roomController.getRoom({ ...reqWithoutUser, params: { id: 'r1' } }, res);
+    expect([401, 403, 404]).toContain(res.status.mock.calls[0][0]);
+  });
+});

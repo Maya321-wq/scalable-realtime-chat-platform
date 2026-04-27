@@ -1,0 +1,271 @@
+/**
+ * Unit Tests for Cache Service (Issue #14 + #16)
+ * 
+ * Coverage targets: 80%+ statements, branches, functions, lines
+ * Mocks: ioredis only (service logic tested in isolation)
+ */
+
+// Mock ioredis BEFORE requiring the module
+const mockRedis = {
+  get: jest.fn(),
+  setex: jest.fn(),
+  del: jest.fn(),
+  on: jest.fn(),
+};
+jest.mock('ioredis', () => jest.fn(() => mockRedis));
+
+const {
+  getCachedMessages,
+  cacheMessages,
+  invalidateCache,
+} = require('../../src/services/cacheService');
+
+// Clean mocks between tests
+afterEach(() => {
+  jest.clearAllMocks();
+});
+
+// ============================================================================
+// getCachedMessages TESTS
+// ============================================================================
+describe('getCachedMessages', () => {
+  
+  test('returns parsed data on cache HIT', async () => {
+    const mockData = [{ _id: 'm1', content: 'hi', userId: 'u1' }];
+    mockRedis.get.mockResolvedValue(JSON.stringify(mockData));
+    
+    const result = await getCachedMessages('room-1');
+    
+    expect(mockRedis.get).toHaveBeenCalledWith('messages:room-1');
+    expect(result).toEqual(mockData);
+  });
+
+  test('returns null on cache MISS', async () => {
+    mockRedis.get.mockResolvedValue(null);
+    
+    const result = await getCachedMessages('room-1');
+    
+    expect(mockRedis.get).toHaveBeenCalledWith('messages:room-1');
+    expect(result).toBeNull();
+  });
+
+  test('returns null gracefully when Redis is down', async () => {
+    mockRedis.get.mockRejectedValue(new Error('connection refused'));
+    
+    const result = await getCachedMessages('room-1');
+    
+    expect(result).toBeNull();
+    // Should not throw - graceful degradation
+    await expect(getCachedMessages('room-1')).resolves.not.toThrow();
+  });
+
+  test('handles invalid/corrupted JSON in cache gracefully', async () => {
+    mockRedis.get.mockResolvedValue('not-valid-json{{{');
+    
+    const result = await getCachedMessages('room-1');
+    
+    // Should catch JSON.parse error and return null (graceful degradation)
+    expect(result).toBeNull();
+  });
+
+  test('handles empty array cached data correctly', async () => {
+    mockRedis.get.mockResolvedValue('[]');
+    
+    const result = await getCachedMessages('room-empty');
+    
+    expect(result).toEqual([]);
+  });
+});
+
+// ============================================================================
+// invalidateCache TESTS
+// ============================================================================
+describe('invalidateCache', () => {
+  
+  test('calls del with correct key format', async () => {
+    mockRedis.del.mockResolvedValue(1);
+    
+    await invalidateCache('room-123');
+    
+    expect(mockRedis.del).toHaveBeenCalledWith('messages:room-123');
+  });
+
+  test('does not throw when Redis is down', async () => {
+    mockRedis.del.mockRejectedValue(new Error('connection refused'));
+    
+    // Should resolve without throwing (graceful degradation)
+    await expect(invalidateCache('room-1')).resolves.not.toThrow();
+  });
+
+  test('handles special characters in roomId safely', async () => {
+    mockRedis.del.mockResolvedValue(1);
+    
+    // Room IDs should be ObjectIds (hex), but test edge case
+    await invalidateCache('room-with-dashes_and.underscores');
+    
+    expect(mockRedis.del).toHaveBeenCalledWith('messages:room-with-dashes_and.underscores');
+  });
+});
+
+// ============================================================================
+// cacheMessages TESTS
+// ============================================================================
+describe('cacheMessages', () => {
+  
+  test('calls setex with correct key, TTL, and stringified data', async () => {
+    mockRedis.setex.mockResolvedValue('OK');
+    const messages = [
+      { _id: 'm1', content: 'hi', userId: 'u1', createdAt: new Date() },
+      { _id: 'm2', content: 'hello', userId: 'u2', createdAt: new Date() }
+    ];
+    
+    await cacheMessages('room-1', messages);
+    
+    expect(mockRedis.setex).toHaveBeenCalledWith(
+      'messages:room-1',
+      300, // TTL: 5 minutes
+      expect.any(String) // JSON string
+    );
+    
+    // Verify the data was stringified correctly
+    const callArgs = mockRedis.setex.mock.calls[0];
+    const parsed = JSON.parse(callArgs[2]);
+    expect(parsed).toEqual(messages);
+  });
+
+  test('does not throw when Redis is down', async () => {
+    mockRedis.setex.mockRejectedValue(new Error('connection refused'));
+    
+    // Should resolve without throwing (graceful degradation)
+    await expect(cacheMessages('room-1', [{ content: 'test' }]))
+      .resolves.not.toThrow();
+  });
+
+  test('caches empty message array correctly', async () => {
+    mockRedis.setex.mockResolvedValue('OK');
+    
+    await cacheMessages('room-empty', []);
+    
+    expect(mockRedis.setex).toHaveBeenCalledWith(
+      'messages:room-empty',
+      300,
+      '[]' // Stringified empty array
+    );
+  });
+
+  test('handles large message arrays', async () => {
+    mockRedis.setex.mockResolvedValue('OK');
+    
+    // Simulate 50 messages (typical pagination limit)
+    const largePayload = Array(50).fill(null).map((_, i) => ({
+      _id: `m${i}`,
+      content: `Message ${i}`,
+      userId: `user-${i % 5}`,
+      createdAt: new Date()
+    }));
+    
+    await cacheMessages('room-large', largePayload);
+    
+    expect(mockRedis.setex).toHaveBeenCalledWith(
+      'messages:room-large',
+      300,
+      expect.any(String)
+    );
+    
+    // Verify it stringified without error
+    const callArgs = mockRedis.setex.mock.calls[0];
+    const parsed = JSON.parse(callArgs[2]);
+    expect(parsed).toHaveLength(50);
+  });
+});
+
+// ============================================================================
+// INTEGRATION & EDGE CASES
+// ============================================================================
+describe('Cache Service - Integration Patterns', () => {
+  
+  test('full flow: MISS -> cache -> subsequent HIT', async () => {
+    // First call: cache MISS
+    mockRedis.get.mockResolvedValueOnce(null);
+    mockRedis.setex.mockResolvedValueOnce('OK');
+    
+    const messages = [{ _id: 'm1', content: 'first' }];
+    
+    // Simulate controller logic: check cache, if MISS then cache result
+    let result = await getCachedMessages('room-flow');
+    expect(result).toBeNull(); // MISS
+    
+    // Then cache the result (as controller would)
+    await cacheMessages('room-flow', messages);
+    expect(mockRedis.setex).toHaveBeenCalled();
+    
+    // Second call: cache HIT
+    mockRedis.get.mockResolvedValueOnce(JSON.stringify(messages));
+    result = await getCachedMessages('room-flow');
+    expect(result).toEqual(messages); // HIT
+  });
+
+  test('invalidate after cache ensures next fetch is MISS', async () => {
+    // Setup: cache has data
+    mockRedis.get.mockResolvedValue(JSON.stringify([{ _id: 'm1' }]));
+    
+    // First fetch: HIT
+    let result = await getCachedMessages('room-inval');
+    expect(result).toHaveLength(1);
+    
+    // Invalidate cache (e.g., after new message)
+    mockRedis.del.mockResolvedValue(1);
+    await invalidateCache('room-inval');
+    expect(mockRedis.del).toHaveBeenCalledWith('messages:room-inval');
+    
+    // Next fetch: should be MISS (cache cleared)
+    mockRedis.get.mockResolvedValue(null);
+    result = await getCachedMessages('room-inval');
+    expect(result).toBeNull();
+  });
+
+  test('key format is consistent across all operations', async () => {
+    const roomId = 'test-room-abc123';
+    const expectedKey = `messages:${roomId}`;
+    
+    // getAll three functions use the same key pattern
+    mockRedis.get.mockResolvedValue(null);
+    await getCachedMessages(roomId);
+    expect(mockRedis.get).toHaveBeenCalledWith(expectedKey);
+    
+    mockRedis.setex.mockResolvedValue('OK');
+    await cacheMessages(roomId, []);
+    expect(mockRedis.setex).toHaveBeenCalledWith(expectedKey, 300, expect.any(String));
+    
+    mockRedis.del.mockResolvedValue(1);
+    await invalidateCache(roomId);
+    expect(mockRedis.del).toHaveBeenCalledWith(expectedKey);
+  });
+});
+
+// ============================================================================
+// REDIS CLIENT EVENT HANDLERS (Minimal Coverage)
+// ============================================================================
+describe('Redis client event registration', () => {
+  
+  test('registers error and connect listeners on init', () => {
+    // The cacheService.js registers these on module load
+    // We verify the mock was called with expected event names
+    expect(mockRedis.on).toHaveBeenCalledWith('error', expect.any(Function));
+    expect(mockRedis.on).toHaveBeenCalledWith('connect', expect.any(Function));
+  });
+
+  test('error listener logs but does not crash', () => {
+    // Extract the error handler that was registered
+    const errorHandler = mockRedis.on.mock.calls.find(
+      call => call[0] === 'error'
+    )?.[1];
+    
+    expect(errorHandler).toBeDefined();
+    
+    // Call it with a mock error - should not throw
+    expect(() => {
+      errorHandler(new Error('test connection error'));
+    }).not.toThrow();
+  });
+});
