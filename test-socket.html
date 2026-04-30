@@ -1,0 +1,120 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>Socket.io Real-Time Test</title>
+  <style>
+    body { font-family: system-ui; max-width: 800px; margin: 2rem auto; padding: 0 1rem; }
+    #messages { border: 1px solid #ccc; padding: 1rem; height: 300px; overflow-y: auto; margin: 1rem 0; }
+    .message { padding: 0.5rem; border-bottom: 1px solid #eee; }
+    .message:last-child { border-bottom: none; }
+    input, button { padding: 0.5rem; margin: 0.25rem 0; }
+    #status { color: #666; font-size: 0.9rem; }
+  </style>
+</head>
+<body>
+  <h1>🔌 Socket.io Real-Time Test</h1>
+  <div id="status">Connecting...</div>
+  
+  <div>
+    <!-- <label>Room ID: <input id="roomId" value="test-room"></label> -->
+    <label>Room ID: <input id="roomId" value="69eaac23e62ba3d8f838a66e"></label>
+    <button onclick="joinRoom()">Join Room</button>
+  </div>
+  
+  <div id="messages"></div>
+  
+  <div>
+    <input id="content" placeholder="Type a message..." style="width: 70%;">
+    <button onclick="send()">Send</button>
+  </div>
+
+  <script src="https://cdn.socket.io/4.7.2/socket.io.min.js"></script>
+  <script>
+    // ===== CONFIG =====
+    const SOCKET_URL = 'http://localhost:3002';
+    // Generate a test token via: node -e "console.log(jwt.sign({userId:'test-user'}, 'dev-secret-change-in-production'))"
+    const TEST_TOKEN = 'Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ1c2VySWQiOiJ0ZXN0LXVzZXItMTIzIiwiaWF0IjoxNzc2OTg2MTExfQ.otFNADXB2cWTvxHm9bI4BuzXUAjLuGIrMsMbpFNgUFA'; // ← REPLACE WITH YOUR GENERATED TOKEN
+    // ==================
+
+    let socket;
+    let currentRoom = null;
+
+    function initSocket() {
+      socket = io(SOCKET_URL, { auth: { token: TEST_TOKEN } });
+
+      socket.on('connect', () => {
+        document.getElementById('status').textContent = '✅ Connected to Socket.io';
+        document.getElementById('status').style.color = 'green';
+        console.log('✅ Socket connected');
+      });
+
+      socket.on('connect_error', (err) => {
+        document.getElementById('status').textContent = '❌ Connection error: ' + err.message;
+        document.getElementById('status').style.color = 'red';
+        console.error('❌ Socket error:', err);
+      });
+
+      socket.on('message-received', (msg) => {
+        addMessage(msg);
+      });
+
+      socket.on('user-joined', (data) => {
+        addSystemMessage(`👋 ${data.userId} joined the room`);
+      });
+
+      socket.on('user-left', (data) => {
+        addSystemMessage(`👋 ${data.userId} left the room`);
+      });
+
+      socket.on('error', (err) => {
+        addSystemMessage(`❌ Error: ${err.message}`);
+      });
+    }
+
+    function joinRoom() {
+      const roomId = document.getElementById('roomId').value.trim();
+      if (!roomId) return alert('Enter a room ID');
+      
+      if (currentRoom) {
+        socket.emit('leave-room', currentRoom);
+      }
+      
+      currentRoom = roomId;
+      socket.emit('join-room', roomId);
+      addSystemMessage(`🚪 Joined room: ${roomId}`);
+    }
+
+    function send() {
+      const content = document.getElementById('content').value.trim();
+      if (!content || !currentRoom) return;
+      
+      socket.emit('send-message', { roomId: currentRoom, content });
+      document.getElementById('content').value = '';
+    }
+
+    function addMessage(msg) {
+      const div = document.getElementById('messages');
+      const messageEl = document.createElement('div');
+      messageEl.className = 'message';
+      messageEl.innerHTML = `<strong>${msg.userId}</strong> <small style="color:#666">${new Date(msg.createdAt).toLocaleTimeString()}</small><br>${msg.content}`;
+      div.appendChild(messageEl);
+      div.scrollTop = div.scrollHeight;
+    }
+
+    function addSystemMessage(text) {
+      const div = document.getElementById('messages');
+      const el = document.createElement('div');
+      el.className = 'message';
+      el.style.color = '#666';
+      el.style.fontStyle = 'italic';
+      el.textContent = text;
+      div.appendChild(el);
+      div.scrollTop = div.scrollHeight;
+    }
+
+    // Initialize on load
+    initSocket();
+  </script>
+</body>
+</html>
