@@ -1,3 +1,5 @@
+const isTest = process.env.NODE_ENV === 'test';
+
 const express = require('express');
 const mongoose = require('mongoose');
 const http = require('http');
@@ -14,86 +16,118 @@ const socketHandler = require('./socket/socketHandler');
 const app = express();
 app.use(express.json());
 
-// MongoDB connection: Support both local dev AND Docker Compose
-const mongoUri = process.env.MONGODB_URI || 
-                 process.env.MONGODB_URL || 
-                 'mongodb://localhost:27017/chatdb';
+// =========================
+// MongoDB Connection
+// =========================
+const mongoUri =
+  process.env.MONGODB_URI ||
+  process.env.MONGODB_URL ||
+  'mongodb://localhost:27017/chatdb';
 
-mongoose.connect(mongoUri)
-  .then(() => console.log('✅ MongoDB connected'))
-  .catch(err => {
-    console.error('❌ MongoDB connection error:', err);
-    process.exit(1); // Exit if DB fails to connect
-  });
+if (!isTest) {
+  mongoose.connect(mongoUri)
+    .then(() => console.log('✅ MongoDB connected'))
+    .catch(err => {
+      console.error('❌ MongoDB connection error:', err);
+      process.exit(1);
+    });
+}
 
-// Initialize RabbitMQ publisher (Issue #15)
-initRabbitMQ().catch(err => console.error('[RabbitMQ] init failed:', err));
+// =========================
+// RabbitMQ Init
+// =========================
+if (!isTest) {
+  initRabbitMQ().catch(err =>
+    console.error('[RabbitMQ] init failed:', err)
+  );
+}
 
-// Register routes
-app.use('/rooms', roomRoutes);              // Room CRUD: POST/GET /rooms
-app.use('/rooms', messageRoutes);           // Message CRUD: POST/GET /rooms/:roomId/messages
-app.use('/', messageRoutes);                // Message CRUD: PUT/DELETE /messages/:messageId
+// =========================
+// Routes
+// =========================
+app.use('/rooms', roomRoutes);
+app.use('/rooms', messageRoutes);
+app.use('/', messageRoutes);
 
-// Health check endpoint (Docker healthchecks + CI)
-app.get('/health', (req, res) => res.json({ 
-  status: 'ok', 
-  service: 'chat-service',
-  timestamp: new Date().toISOString()
-}));
+// =========================
+// Health Check
+// =========================
+app.get('/health', (req, res) =>
+  res.json({
+    status: 'ok',
+    service: 'chat-service',
+    timestamp: new Date().toISOString(),
+  })
+);
 
-// === Socket.io Setup (Issue #13) ===
+// =========================
+// HTTP + Socket Server
+// =========================
 const server = http.createServer(app);
 
 const io = new Server(server, {
   cors: {
-    // origin: process.env.FRONTEND_URL || 'http://localhost:3000',
-    origin: "*",  // Allow all origins for local testing
+    origin: '*',
     methods: ['GET', 'POST'],
     credentials: true,
   },
 });
 
-// Attach Socket.io handler (auth middleware + event listeners)
-socketHandler(io);
+// Socket.io
+if (!isTest) {
+  socketHandler(io);
+}
 
-// === Server Startup ===
+// =========================
+// Start Server
+// =========================
 const PORT = process.env.PORT || 3002;
-server.listen(PORT, '0.0.0.0', () => {
-  console.log(`🚀 Chat service running on port ${PORT}`);
-  console.log(` Socket.io ready for real-time messaging`);
-});
 
-// === Graceful Shutdown (Docker/Kubernetes) ===
-process.on('SIGTERM', () => {
-  console.log('SIGTERM received, shutting down gracefully');
-  
-  // Close Socket.io connections
-  io.close(() => {
-    console.log('Socket.io closed');
+if (!isTest) {
+  server.listen(PORT, '0.0.0.0', () => {
+    console.log(`🚀 Chat service running on port ${PORT}`);
+    console.log(' Socket.io ready for real-time messaging');
   });
-  
-  // Close HTTP server
-  server.close(() => {
-    console.log('HTTP server closed');
-    
-    // Close MongoDB connection
-    mongoose.connection.close(() => {
-      console.log('MongoDB connection closed');
-      process.exit(0);
+}
+
+// =========================
+// Graceful Shutdown
+// =========================
+if (!isTest) {
+  process.on('SIGTERM', () => {
+    console.log('SIGTERM received, shutting down gracefully');
+
+    io.close(() => {
+      console.log('Socket.io closed');
+    });
+
+    server.close(() => {
+      console.log('HTTP server closed');
+
+      mongoose.connection.close(() => {
+        console.log('MongoDB connection closed');
+        process.exit(0);
+      });
     });
   });
-});
+}
 
-// Handle uncaught errors
-process.on('uncaughtException', (err) => {
-  console.error('Uncaught Exception:', err);
-  process.exit(1);
-});
+// =========================
+// Crash Handlers (prod only)
+// =========================
+if (!isTest) {
+  process.on('uncaughtException', (err) => {
+    console.error('Uncaught Exception:', err);
+    process.exit(1);
+  });
 
-process.on('unhandledRejection', (reason, promise) => {
-  console.error('Unhandled Rejection at:', promise, 'reason:', reason);
-  process.exit(1);
-});
+  process.on('unhandledRejection', (reason, promise) => {
+    console.error('Unhandled Rejection at:', promise, 'reason:', reason);
+    process.exit(1);
+  });
+}
 
-// Export for testing
+// =========================
+// Export (for tests)
+// =========================
 module.exports = { server, app, io };
